@@ -4,7 +4,53 @@
 # declaration at the top                                              #
 #######################################################################
 
-from deep_rl import *
+from deeprl import *
+
+def rainbow_pixel(**kwargs):
+    generate_tag(kwargs)
+    kwargs.setdefault('log_level', 0)
+    config = Config()
+    config.merge(kwargs)
+
+    config.dueling = True
+    config.double = True
+    config.prioritize = True
+    config.nstep = 3
+    config.noisy = True
+    config.noise_std = 0.5
+    config.timestr = get_time_str()
+
+    config.categorical_v_max = 10
+    config.categorical_v_min = -10
+    config.categorical_n_atoms = 51
+
+    config.sgd_update_frequency = 4
+    config.exploration_steps = 20000
+    config.discount = 0.99
+    config.max_steps = int(2e7)
+    config.target_network_update_freq = 8000
+    # config.gradient_clip = 5
+    config.eval_interval = 100000
+    config.eval_episodes = 10
+    config.test_epsilon = 0.01
+    config.log_interval = 10000
+    config.save_interval = config.eval_interval
+
+    mkdir(f'./log/{config.tag}-{config.timestr}/')
+    config.task_fn = lambda: Task(config.game, log_file=f'./log/{config.tag}-{config.timestr}/train')
+    config.eval_env = Task(config.game, log_file=f'./log/{config.tag}-{config.timestr}/eval')
+    config.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.0000625, eps=0.00015)
+    config.network_fn = lambda: RainbowNet(config.action_dim, config.categorical_n_atoms, NatureConvBody(noisy=config.noisy, noise_std=config.noise_std))
+
+    config.random_action_prob = LinearSchedule(1.0, 0.01, int(1e6))
+
+    config.replay_fn = lambda: AsyncReplay(memory_size=int(1e6), batch_size=32, prioritize=config.prioritize, alpha=0.5)
+    config.beta_schedule = LinearSchedule(0.4, 1.0, (config.max_steps - config.exploration_steps) // config.sgd_update_frequency)
+
+    config.state_normalizer = ImageNormalizer()
+    config.reward_normalizer = SignNormalizer()
+
+    run_steps(RainbowAgent(config))
 
 
 # DQN
@@ -507,6 +553,7 @@ if __name__ == '__main__':
     td3_continuous(game=game)
 
     game = 'BreakoutNoFrameskip-v4'
+    rainbow_pixel(game=game)
     # dqn_pixel(game=game)
     # quantile_regression_dqn_pixel(game=game)
     # categorical_dqn_pixel(game=game)
