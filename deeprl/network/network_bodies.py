@@ -8,13 +8,18 @@ from .network_utils import *
 
 
 class NatureConvBody(nn.Module):
-    def __init__(self, in_channels=4):
+    def __init__(self, in_channels=4, noisy=False, noise_std=0.5):
         super(NatureConvBody, self).__init__()
         self.feature_dim = 512
+        self.noisy = noisy
+        self.noise_std = noise_std
         self.conv1 = layer_init(nn.Conv2d(in_channels, 32, kernel_size=8, stride=4))
         self.conv2 = layer_init(nn.Conv2d(32, 64, kernel_size=4, stride=2))
         self.conv3 = layer_init(nn.Conv2d(64, 64, kernel_size=3, stride=1))
-        self.fc4 = layer_init(nn.Linear(7 * 7 * 64, self.feature_dim))
+        if noisy:
+            self.fc4 = NoisyLinear(7 * 7 * 64, self.feature_dim, noise_std)
+        else:
+            self.fc4 = layer_init(nn.Linear(7 * 7 * 64, self.feature_dim))
 
     def forward(self, x):
         y = F.relu(self.conv1(x))
@@ -23,6 +28,41 @@ class NatureConvBody(nn.Module):
         y = y.view(y.size(0), -1)
         y = F.relu(self.fc4(y))
         return y
+
+class RainbowNet(nn.Module, BaseNet):
+    def __init__(self, action_dim, num_atoms, body):
+        super(RainbowNet, self).__init__()
+        if body.noisy:
+            self.fc_value = NoisyLinear(body.feature_dim, num_atoms, body.noise_std)
+            self.fc_advantage = NoisyLinear(body.feature_dim, action_dim * num_atoms, body.noise_std)
+        else:
+            self.fc_value = layer_init(nn.Linear(body.feature_dim, num_atoms))
+            self.fc_advantage = layer_init(nn.Linear(body.feature_dim, action_dim * num_atoms))
+
+        self.action_dim = action_dim
+        self.num_atoms = num_atoms
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        value = self.fc_value(phi).view(-1, 1, self.num_atoms)
+        advantange = self.fc_advantage(phi).view(-1, self.action_dim, self.num_atoms) 
+        advantange -= advantange.mean(dim=1, keepdim=True)
+        q = advantange + value
+
+        prob = F.softmax(q, dim=-1)
+        log_prob = F.log_softmax(q, dim=-1)
+
+        return prob, log_prob    
+
+    def reset_noise(self):
+        for name, module in self.named_children():
+            if isinstance(module, NoisyLinear):
+                module.reset_noise()
+        for name, module in self.body.named_children():
+            if isinstance(module, NoisyLinear):
+                module.reset_noise()
 
 
 class DDPGConvBody(nn.Module):
